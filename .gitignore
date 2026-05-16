@@ -28,11 +28,11 @@ wheels/
 *.ipynb
 
 # Output
-output/*.csv
-output/*.pkl
-output/*.png
-output/*.pdf
-output/*.json
+!output/*.csv
+!output/*.pkl
+!output/*.png
+!output/*.pdf
+!output/*.json
 !output/.gitkeep
 
 # IDE

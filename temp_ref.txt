@@ -1,0 +1,250 @@
+﻿"""
+繝・・繧ｿ蜑榊・逅・ヱ繧､繝励Λ繧､繝ｳ: 繝昴Φ繝苓ｨｭ蛯吶・騾｣邯夂噪繝上じ繝ｼ繝臥焚雉ｪ諤ｧ繝｢繝・Ν
+
+Phase 1-2縺ｮ螳溯｣・
+1. 繝昴Φ繝苓ｨｭ蛯吶・謚ｽ蜃ｺ縺ｨ繝槭せ繧ｿ邨仙粋
+2. 譎らｳｻ蛻励ョ繝ｼ繧ｿ縺ｮ隱ｭ縺ｿ霎ｼ縺ｿ縺ｨ繝輔ぅ繝ｫ繧ｿ
+3. 蛛･蜈ｨ蠎ｦ迥ｶ諷九・髮｢謨｣蛹厄ｼ医ヱ繝ｼ繧ｻ繝ｳ繧ｿ繧､繝ｫ4蛻・牡・・
+4. 蜈ｱ螟蛾㍼縺ｮ貅門ｙ
+5. 轤ｹ讀懊・繧｢縺ｮ謚ｽ蜃ｺ
+6. PyMC逕ｨ繝・・繧ｿ縺ｮ謨ｴ蠖｢
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from typing import Dict, Tuple, List
+import warnings
+from sklearn.decomposition import PCA
+from scipy import stats
+warnings.filterwarnings('ignore')
+
+
+# ===========================
+# Configuration
+# ===========================
+class Config:
+    """險ｭ螳壹け繝ｩ繧ｹ"""
+    # 繝代せ險ｭ螳・
+    BASE_DIR = Path(__file__).parent
+    DATA_SOURCE = BASE_DIR / "data" / "data_source"
+    DATA_PROCESSED = BASE_DIR / "data" / "processed"
+    
+    # 蜈･蜉帙ヵ繧｡繧､繝ｫ
+    EQUIPMENT_MASTER = DATA_SOURCE / "251202_Raw_DB_險ｭ蛯吩ｸ隕ｧ.csv"
+    CHECK_RESULTS_AGG = DATA_SOURCE / "cross_aggregated_report" / "251217_CSV_繝√ぉ繝・け鬆・岼_謨ｰ蛟､邨先棡100莉ｶ莉･荳・csv"
+    COMMON_CODE_DICT = DATA_SOURCE / "cross_aggregated_report" / "common_code_dictionary.csv"
+    TIME_SERIES = DATA_PROCESSED / "processed_time_series_v2.csv"
+    
+    # 蜃ｺ蜉帙ヵ繧｡繧､繝ｫ
+    PUMP_MASTER = DATA_PROCESSED / "pump_master.csv"
+    PUMP_TIME_SERIES = DATA_PROCESSED / "pump_time_series.csv"
+    PUMP_STATES = DATA_PROCESSED / "pump_states.csv"
+    PUMP_COVARIATES = DATA_PROCESSED / "pump_covariates.csv"
+    TRANSITION_PAIRS = DATA_PROCESSED / "transition_pairs.csv"
+    MODEL_INPUT = DATA_PROCESSED / "model_input.npz"
+    
+    # 繝・・繧ｿ繝輔ぅ繝ｫ繧ｿ繝ｪ繝ｳ繧ｰ險ｭ螳・
+    TARGET_COMMON_CODE = "02"  # 繝昴Φ繝苓ｨｭ蛯・
+    MIN_DATA_POINTS = 30  # 譛菴弱ョ繝ｼ繧ｿ轤ｹ謨ｰ
+    MIN_DELTA_T = 1  # 譛蟆冗せ讀憺俣髫費ｼ域律・・- 邱ｩ蜥・ 7 竊・1
+    MAX_DELTA_T = 365  # 譛螟ｧ轤ｹ讀憺俣髫費ｼ域律・・- 邱ｩ蜥・ 180 竊・365
+    LOOKBACK_DAYS = 90  # 蜈ｱ螟蛾㍼險育ｮ礼畑縺ｮ繝ｫ繝・け繝舌ャ繧ｯ譛滄俣
+    
+    # 蛛･蜈ｨ蠎ｦ迥ｶ諷区焚・・07: 蜉｣蛹悶う繝吶Φ繝亥｢怜ｹ・・縺溘ａ8蛻・牡縺ｫ諡｡螟ｧ・・
+    N_STATES = 8  # State 1, 2, 3, 4, 5, 6, 7, 8, 5, 6, 7, 8
+    
+    # 繧ｨ繝ｳ繧ｳ繝ｼ繝・ぅ繝ｳ繧ｰ
+    ENCODING = 'cp932'  # 譌･譛ｬ隱曚SV繝輔ぃ繧､繝ｫ逕ｨ
+
+
+# ===========================
+# Feature Engineering (v08)
+# ===========================
+class FeatureEngineer:
+    """
+    邨ｱ險育噪迚ｹ蠕ｴ驥上お繝ｳ繧ｸ繝九い繝ｪ繝ｳ繧ｰ繧ｯ繝ｩ繧ｹ (v08)
+    
+    驕主悉縺ｮ30譌･逡ｰ蟶ｸ讀懃衍縺ｧ譛牙柑縺縺｣縺・2蛟九・迚ｹ蠕ｴ驥上ｒ險育ｮ・
+    - 邨ｱ險育噪迚ｹ蠕ｴ驥・ mean, std, min, max, median, q25, q75, iqr, skewness, kurtosis, cv_90d
+    - 繝医Ξ繝ｳ繝臥音蠕ｴ驥・ trend_slope_90d, trend_intercept, recent_vs_past_ratio, recent_vs_past_diff, recent_change_rate
+    - 螟牙虚諤ｧ迚ｹ蠕ｴ驥・ diff_mean, diff_abs_mean, rolling_std_7d/14d/30d_mean, max_drawdown, mean_drawdown
+    """
+    
+    @staticmethod
+    def extract_all_features(sequence: np.ndarray) -> Dict[str, float]:
+        """
+        蜈ｨ迚ｹ蠕ｴ驥上・謚ｽ蜃ｺ・・aN/Inf螳牙・迚茨ｼ・
+        
+        Args:
+            sequence: 譎らｳｻ蛻励ョ繝ｼ繧ｿ [seq_len]
+            
+        Returns:
+            蜈ｨ迚ｹ蠕ｴ驥上・霎樊嶌・・2蛟具ｼ・
+        """
+        features = {}
+        
+        # 蜈･蜉帙ョ繝ｼ繧ｿ縺ｮ繧ｯ繝ｪ繝ｼ繝ｳ
+        sequence = np.nan_to_num(sequence, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # 譛菴弱ョ繝ｼ繧ｿ轤ｹ謨ｰ繝√ぉ繝・け
+        if len(sequence) < 3:
+            return {k: 0.0 for k in [
+                'mean', 'std', 'min', 'max', 'median', 'q25', 'q75', 'iqr',
+                'skewness', 'kurtosis', 'cv_90d', 'trend_slope_90d', 'trend_intercept',
+                'recent_vs_past_ratio', 'recent_vs_past_diff', 'recent_change_rate',
+                'diff_mean', 'diff_abs_mean', 'rolling_std_7d_mean', 'rolling_std_14d_mean',
+                'rolling_std_30d_mean', 'max_drawdown', 'mean_drawdown'
+            ]}
+        
+        # === 邨ｱ險育噪迚ｹ蠕ｴ驥・===
+        features['mean'] = float(np.mean(sequence))
+        features['std'] = float(np.std(sequence))
+        features['min'] = float(np.min(sequence))
+        features['max'] = float(np.max(sequence))
+        features['median'] = float(np.median(sequence))
+        features['q25'] = float(np.percentile(sequence, 25))
+        features['q75'] = float(np.percentile(sequence, 75))
+        features['iqr'] = features['q75'] - features['q25']
+        
+        # 豁ｪ蠎ｦ繝ｻ蟆門ｺｦ・・aN蟇ｾ遲厄ｼ・
+        if len(sequence) > 3:
+            try:
+                skew_val = stats.skew(sequence)
+                kurt_val = stats.kurtosis(sequence)
+                features['skewness'] = float(skew_val) if np.isfinite(skew_val) else 0.0
+                features['kurtosis'] = float(kurt_val) if np.isfinite(kurt_val) else 0.0
+            except:
+                features['skewness'] = 0.0
+                features['kurtosis'] = 0.0
+        else:
+            features['skewness'] = 0.0
+            features['kurtosis'] = 0.0
+        
+        # 螟牙虚菫よ焚・亥ｮ牙・縺ｪ髯､邂暦ｼ・
+        mean_abs = abs(features['mean'])
+        if mean_abs > 1e-10:
+            cv_val = features['std'] / mean_abs
+            features['cv_90d'] = float(cv_val) if np.isfinite(cv_val) else 0.0
+        else:
+            features['cv_90d'] = 0.0
+        
+        # === 繝医Ξ繝ｳ繝臥音蠕ｴ驥・===
+        try:
+            # 邱壼ｽ｢蝗槫ｸｰ縺ｫ繧医ｋ蛯ｾ縺・
+            coeffs = np.polyfit(np.arange(len(sequence)), sequence, deg=1)
+            slope = float(coeffs[0])
+            intercept = float(coeffs[1])
+            features['trend_slope_90d'] = slope if np.isfinite(slope) else 0.0
+            features['trend_intercept'] = intercept if np.isfinite(intercept) else float(sequence[0])
+        except:
+            features['trend_slope_90d'] = 0.0
+            features['trend_intercept'] = float(sequence[0])
+        
+        # 譛霑代・譛滄俣 vs 驕主悉縺ｮ譛滄俣
+        if len(sequence) >= 60:
+            recent_mean = float(np.mean(sequence[-30:]))
+            past_mean = float(np.mean(sequence[-60:-30]))
+            
+            if abs(past_mean) > 1e-10:
+                ratio = recent_mean / past_mean
+                features['recent_vs_past_ratio'] = float(ratio) if np.isfinite(ratio) else 1.0
+                features['recent_vs_past_diff'] = float(recent_mean - past_mean)
+            else:
+                features['recent_vs_past_ratio'] = 1.0
+                features['recent_vs_past_diff'] = 0.0
+        else:
+            features['recent_vs_past_ratio'] = 1.0
+            features['recent_vs_past_diff'] = 0.0
+        
+        # 譛邨ょ､縺ｮ螟牙喧邇・
+        if len(sequence) >= 10:
+            recent_slope = float((sequence[-1] - sequence[-10]) / 10)
+            features['recent_change_rate'] = recent_slope if np.isfinite(recent_slope) else 0.0
+        else:
+            features['recent_change_rate'] = 0.0
+        
+        # === 螟牙虚諤ｧ迚ｹ蠕ｴ驥・===
+        # 蟾ｮ蛻・ｳｻ蛻・
+        diff = np.diff(sequence)
+        diff = np.nan_to_num(diff, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        features['diff_mean'] = float(np.mean(diff))
+        features['diff_abs_mean'] = float(np.mean(np.abs(diff)))
+        
+        # 繝ｭ繝ｼ繝ｪ繝ｳ繧ｰ邨ｱ險磯㍼・・譌･縲・4譌･縲・0譌･・・
+        for window in [7, 14, 30]:
+            if len(sequence) >= window:
+                rolling_std = []
+                for i in range(len(sequence) - window + 1):
+                    window_std = float(np.std(sequence[i:i+window]))
+                    if np.isfinite(window_std):
+                        rolling_std.append(window_std)
+                
+                if len(rolling_std) > 0:
+                    features[f'rolling_std_{window}d_mean'] = float(np.mean(rolling_std))
+                else:
+                    features[f'rolling_std_{window}d_mean'] = 0.0
+            else:
+                features[f'rolling_std_{window}d_mean'] = 0.0
+        
+        # 譛螟ｧ繝峨Ο繝ｼ繝繧ｦ繝ｳ・医ヴ繝ｼ繧ｯ縺九ｉ縺ｮ譛螟ｧ荳玖誠・・
+        cummax = np.maximum.accumulate(sequence)
+        drawdown = cummax - sequence
+        drawdown = np.nan_to_num(drawdown, nan=0.0, posinf=0.0, neginf=0.0)
+        features['max_drawdown'] = float(np.max(drawdown))
+        features['mean_drawdown'] = float(np.mean(drawdown))
+        
+        # 譛邨ら噪縺ｪNaN/Inf繝√ぉ繝・け
+        for key, value in features.items():
+            if not np.isfinite(value):
+                features[key] = 0.0
+        
+        return features
+
+
+# ===========================
+# Step 1: 繝昴Φ繝苓ｨｭ蛯吶・謚ｽ蜃ｺ縺ｨ繝槭せ繧ｿ邨仙粋
+# ===========================
+def extract_pump_master(config: Config) -> pd.DataFrame:
+    """
+    繝昴Φ繝苓ｨｭ蛯吶・繧ｹ繧ｿ繧呈歓蜃ｺ
+    
+    Returns:
+        DataFrame with columns: equipment_id, equipment_name, category, installation_date
+    """
+    print("\n[Step 1] 繝昴Φ繝苓ｨｭ蛯吶・繧ｹ繧ｿ縺ｮ謚ｽ蜃ｺ...")
+    
+    # 髮・ｨ育ｵ先棡縺九ｉ繝昴Φ繝苓ｨｭ蛯僮D繧呈歓蜃ｺ
+    check_results_df = pd.read_csv(
+        config.CHECK_RESULTS_AGG, 
+        encoding=config.ENCODING
+    )
+    print(f"  繝√ぉ繝・け鬆・岼髮・ｨ・ {len(check_results_df)} 莉ｶ")
+    
+    # 蛻怜錐繝槭ャ繝斐Φ繧ｰ
+    col_mapping = {
+        '險ｭ蛯冓d': 'equipment_id',
+        '險ｭ蛯吝錐': 'equipment_name',
+        '險ｭ蛯吝・鬘・: 'category'
+    }
+    
+    available_cols = {k: v for k, v in col_mapping.items() if k in check_results_df.columns}
+    pump_master = check_results_df.rename(columns=available_cols)
+    
+    # 險ｭ蛯僮D縺ｧ繝ｦ繝九・繧ｯ蛹・
+    if 'equipment_id' in pump_master.columns:
+        pump_master = pump_master.drop_duplicates(subset=['equipment_id'])
+    
+    print(f"  謚ｽ蜃ｺ縺輔ｌ縺溘Θ繝九・繧ｯ險ｭ蛯呎焚: {len(pump_master)}")
+    
+    # 251202_Raw_DB_險ｭ蛯吩ｸ隕ｧ.csv縺九ｉ險ｭ蛯吝ｹｴ譛域律繧貞叙蠕・
+    print("\n  險ｭ蛯吝ｹｴ譛域律縺ｮ蜿門ｾ・..")
+    try:
+        equipment_master = pd.read_csv(
+            config.EQUIPMENT_MASTER,
+            encoding=config.ENCODING,
+            on_bad_lines='skip',
+            low_memory=False
+        )
+        

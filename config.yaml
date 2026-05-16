@@ -1,0 +1,59 @@
+# LiNGAM因果探索MVP設定ファイル
+
+# データパス
+data:
+  input_dir: "data/processed"
+  output_dir: "output"
+  labeled_time_series: "data/processed/labeled_time_series.csv"
+  selected_equipment: "data/processed/selected_64_equipment.json"
+  pump_master: "data/processed/pump_master.csv"
+
+# 特徴量エンジニアリング設定
+feature_engineering:
+  lookback_days: 90  # 時間窓サイズ（日数）
+  min_data_points: 3  # 最低必要データ点数
+  rolling_windows: [7, 14, 30]  # ローリング統計量の窓サイズ（日）
+  fill_missing: 0.0  # 不足時の埋め値
+
+# 前処理設定
+preprocessing:
+  outlier_threshold: 3.0  # 外れ値の標準偏差閾値（±3σ）
+  interpolation_method: "linear"  # 補間方法（linear, ffill, bfill）
+  max_missing_ratio: 0.3  # 最大欠損率（これを超えるセンサーは除外）
+
+# スケーリングと特徴選択
+scaling:
+  method: "standard"  # standard, minmax, robust
+  correlation_threshold: 0.95  # 相関の高いペアを除外する閾値
+  vif_threshold: 10.0  # VIF閾値（多重共線性除外）
+  variance_threshold: 0.01  # 分散閾値（ほぼ定数の特徴量を除外）
+
+# LiNGAM設定
+lingam:
+  algorithm: "DirectLiNGAM"  # DirectLiNGAM, ICALiNGAM, VARLiNGAM
+  random_state: 42
+  max_iter: 1000
+  
+# ブートストラップ検証設定
+bootstrap:
+  n_sampling: 100  # サンプリング回数
+  sample_ratio: 0.8  # サブサンプリング比率
+  stability_threshold: 0.7  # エッジ出現頻度の閾値（70%以上を採用）
+
+# KPI設定
+kpi:
+  target_labels: ["label_future_30d", "label_future_60d", "label_future_90d"]
+  primary_label: "label_future_90d"  # デフォルトは90日先予測
+
+# 可視化設定
+visualization:
+  figure_size: [12, 10]
+  dpi: 300
+  edge_width_scale: 3.0  # エッジ重みの表示スケール
+  node_size_scale: 500
+  layout: "spring"  # spring, circular, kamada_kawai
+
+# その他
+misc:
+  n_jobs: 10  # 並列処理のコア数(-1で全コア使用、10で10コア使用)
+  verbose: 1  # ログレベル(0: なし, 1: 標準, 2: 詳細)

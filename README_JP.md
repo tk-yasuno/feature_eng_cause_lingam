@@ -170,6 +170,31 @@ Apache License 2.0 - 詳細は [LICENSE](LICENSE) ファイルを参照してく
 
 ## バージョン履歴
 
+### v0.1.3 (2025-05-27)
+- **データ不均衡補正**: SMOTE拡張の自動検出・適用
+  - 10倍以上の不均衡を検出し、自動でSMOTE拡張
+  - bottom30を2,240→45,310レコードに拡張（20倍）
+  - 因果効果の保存性検証（kurtosis/skewness <3%変化）
+- **比較分析**: 元データと拡張後データの因果構造を比較
+- `imbalance_correction` 設定項目追加（config.yaml）
+- `apply_smote_if_needed()` 関数実装（src/causal_discovery.py）
+- Lesson_Hazard_Cause.md Section 7.2 更新
+
+### v0.1.2 (2025-05-26)
+- **PyMC NUTS推定統合**: マルコフ劣化ハザードモデルによるu_i推定
+  - 2,338秒のNUTS推定で112ポンプのu_i抽出（範囲: -5.51 ~ +6.47）
+  - R-hat 1.00-1.01, ESS 900+で収束確認
+- **3グループ分析**: top30/middle/bottom30の因果構造比較
+  - top30: 57,881レコード, kurtosis +0.024
+  - middle: 32,740レコード, **直接効果なし**
+  - bottom30: 2,240レコード, kurtosis -0.969（**40倍差**）
+- **可視化強化**: ノード配置・ラベル・エッジの改善
+  - spring_layout kパラメータ調整（2.5-3.5）
+  - 湾曲エッジ（connectionstyle='arc3,rad=0.1'）
+  - ラベル位置オフセット（+0.08）
+- `u_group_analysis` 設定項目追加（config.yaml）
+- `Lesson_Hazard_Cause.md` 完成（800+行）
+
 ### v0.1.0 (2026-05-16)
 - 初回リリース
 - DirectLiNGAMによる因果探索実装

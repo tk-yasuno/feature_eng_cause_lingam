@@ -276,6 +276,153 @@ class DataPreprocessor:
             print(f"  日付範囲: {df['date'].min()} ~ {df['date'].max()}")
         
         return df
+    
+    def prepare_var_time_series(
+        self,
+        processed_time_series_df: pd.DataFrame,
+        selected_sensors_df: pd.DataFrame,
+        var_order: int = 7,
+        min_lookback: int = 30,
+        output_dir: str = "output"
+    ) -> Tuple[np.ndarray, List[str], pd.DataFrame]:
+        """
+        VARLiNGAM用の時系列データを準備
+        
+        選定された50センサーの日次時系列データを、VARLiNGAM用の
+        行列形式に変換します。
+        
+        Args:
+            processed_time_series_df: processed_time_series.csv データ
+            selected_sensors_df: var_selected_sensors.csv データ
+                (equipment_id, check_item_id列が必要)
+            var_order: VAR次数（ラグ日数）
+            min_lookback: 最低必要日数（データ点数を確保）
+            output_dir: 出力ディレクトリ
+        
+        Returns:
+            (時系列データ行列, 変数名リスト, 時系列DataFrame)
+            - 時系列データ行列: (n_samples, n_sensors) numpy配列
+            - 変数名リスト: 各列のセンサー識別子
+            - 時系列DataFrame: 保存用のDataFrame
+        """
+        if self.verbose:
+            print(f"\n[VARLiNGAM用時系列データ準備]")
+            print(f"  VAR次数: {var_order}日")
+            print(f"  最低必要日数: {min_lookback}日")
+            print(f"  選定センサー数: {len(selected_sensors_df)}")
+        
+        # 日付型に変換
+        processed_time_series_df['date'] = pd.to_datetime(processed_time_series_df['date'])
+        
+        # 選定されたセンサーでフィルタリング
+        selected_pairs = list(
+            zip(
+                selected_sensors_df['equipment_id'],
+                selected_sensors_df['check_item_id']
+            )
+        )
+        
+        filtered_data = processed_time_series_df[
+            processed_time_series_df.apply(
+                lambda row: (row['equipment_id'], row['check_item_id']) in selected_pairs,
+                axis=1
+            )
+        ].copy()
+        
+        if self.verbose:
+            print(f"  フィルタリング後レコード数: {len(filtered_data)}")
+        
+        # 日付でソート
+        filtered_data = filtered_data.sort_values('date')
+        
+        # 連続した日付のみを抽出（最小必要日数を満たすもの）
+        min_required_days = var_order + min_lookback
+        
+        # 各センサーグループのデータ範囲を確認
+        valid_sensors = []
+        sensor_data_dict = {}
+        
+        for (equipment_id, check_item_id), group in filtered_data.groupby(['equipment_id', 'check_item_id']):
+            group = group.sort_values('date')
+            
+            # 日次データに変換（欠損日を補完）
+            date_range = pd.date_range(start=group['date'].min(), end=group['date'].max(), freq='D')
+            group_reindexed = group.set_index('date').reindex(date_range)
+            
+            # 値列を前方補間 + 線形補間
+            group_reindexed['value'] = group_reindexed['value'].fillna(method='ffill').fillna(method='bfill')
+            
+            # 最低必要日数を満たすかチェック
+            if len(group_reindexed) >= min_required_days:
+                sensor_id = f"{equipment_id}_{check_item_id}"
+                valid_sensors.append({
+                    'sensor_id': sensor_id,
+                    'equipment_id': equipment_id,
+                    'check_item_id': check_item_id,
+                    'n_days': len(group_reindexed)
+                })
+                sensor_data_dict[sensor_id] = group_reindexed['value'].values
+        
+        if self.verbose:
+            print(f"  最低日数を満たすセンサー数: {len(valid_sensors)}")
+        
+        if len(valid_sensors) == 0:
+            raise ValueError(f"最低{min_required_days}日分のデータを持つセンサーが見つかりません")
+        
+        # 全センサーで共通の日付範囲を決定
+        # 最も短いセンサーの日数に合わせる
+        min_days = min([s['n_days'] for s in valid_sensors])
+        
+        if self.verbose:
+            print(f"  共通日数: {min_days}日")
+        
+        # 時系列データ行列を作成
+        n_samples = min_days
+        n_sensors = len(valid_sensors)
+        
+        time_series_matrix = np.zeros((n_samples, n_sensors))
+        variable_names = []
+        
+        for i, sensor_info in enumerate(valid_sensors):
+            sensor_id = sensor_info['sensor_id']
+            sensor_values = sensor_data_dict[sensor_id]
+            
+            # 最新のmin_days分を取得
+            time_series_matrix[:, i] = sensor_values[-min_days:]
+            variable_names.append(sensor_id)
+        
+        # 標準化（VARLiNGAMの数値的安定性のため）
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        time_series_matrix = scaler.fit_transform(time_series_matrix)
+        
+        if self.verbose:
+            print(f"  時系列データ行列: {time_series_matrix.shape}")
+            print(f"  標準化: 完了（平均0, 標準偏差1）")
+            print(f"  変数名数: {len(variable_names)}")
+        
+        # DataFrameに変換して保存
+        time_series_df = pd.DataFrame(
+            time_series_matrix,
+            columns=variable_names
+        )
+        
+        # 日付インデックスを追加（最新の日付から遡る）
+        # 注: 実際の日付は各センサーで異なる可能性があるため、
+        # ここでは相対的な日付インデックス（0, 1, 2, ...）を使用
+        time_series_df.insert(0, 'time_index', range(n_samples))
+        
+        # 保存
+        import os
+        os.makedirs(output_dir, exist_ok=True)
+        
+        output_path = os.path.join(output_dir, "var_time_series.csv")
+        time_series_df.to_csv(output_path, index=False, encoding='utf-8-sig')
+        
+        if self.verbose:
+            print(f"  保存: {output_path}")
+        
+        return time_series_matrix, variable_names, time_series_df
 
 
 def load_and_preprocess_data(

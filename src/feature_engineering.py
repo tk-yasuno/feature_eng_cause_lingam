@@ -178,6 +178,134 @@ class FeatureEngineer:
         ]
     
     @staticmethod
+    def create_var_features(
+        time_series_df: pd.DataFrame,
+        max_sensors: int = 50,
+        missing_threshold: float = 0.1,
+        output_dir: str = "output",
+        verbose: bool = True
+    ) -> pd.DataFrame:
+        """
+        VARLiNGAM用の代表センサーを自動選定
+        
+        64機器×229センサー(最大14,656変数)から、欠損率と分散に基づいて
+        50個の代表センサーを選定します。
+        
+        選定基準:
+        1. 欠損率 < 10% (時系列データの連続性を確保)
+        2. 分散上位 (変動が大きいセンサーを優先)
+        3. 各機器から最低1センサーは選定 (機器カバレッジを保証)
+        
+        Args:
+            time_series_df: processed_time_series.csv データ
+            max_sensors: 選定する最大センサー数
+            missing_threshold: 欠損率閾値 (0.1 = 10%)
+            output_dir: 出力ディレクトリ
+            verbose: 進捗表示
+        
+        Returns:
+            選定されたセンサーの情報を含むDataFrame
+            (sensor_id, equipment_id, missing_ratio, variance, rank)
+        """
+        if verbose:
+            print(f"\n[VARLiNGAM用センサー自動選定]")
+            print(f"  入力データ: {len(time_series_df)} レコード")
+            print(f"  設備数: {time_series_df['equipment_id'].nunique()}")
+            print(f"  センサー数: {time_series_df['check_item_id'].nunique()}")
+        
+        # 日付型に変換
+        time_series_df['date'] = pd.to_datetime(time_series_df['date'])
+        
+        # 各(equipment_id, check_item_id)ごとに統計量を計算
+        sensor_stats = []
+        
+        for (equipment_id, check_item_id), group in time_series_df.groupby(['equipment_id', 'check_item_id']):
+            total_count = len(group)
+            missing_count = group['value'].isna().sum()
+            missing_ratio = missing_count / total_count if total_count > 0 else 1.0
+            
+            # 分散計算（欠損値を除外）
+            valid_values = group['value'].dropna()
+            variance = valid_values.var() if len(valid_values) > 1 else 0.0
+            
+            sensor_stats.append({
+                'equipment_id': equipment_id,
+                'check_item_id': check_item_id,
+                'sensor_id': f"{equipment_id}_{check_item_id}",
+                'total_count': total_count,
+                'missing_count': missing_count,
+                'missing_ratio': missing_ratio,
+                'variance': variance,
+                'valid_count': len(valid_values)
+            })
+        
+        sensor_stats_df = pd.DataFrame(sensor_stats)
+        
+        if verbose:
+            print(f"  センサー組み合わせ数: {len(sensor_stats_df)}")
+        
+        # 基準1: 欠損率が閾値未満のセンサーをフィルタリング
+        filtered_df = sensor_stats_df[sensor_stats_df['missing_ratio'] < missing_threshold].copy()
+        
+        if verbose:
+            print(f"  欠損率<{missing_threshold*100:.0f}%のセンサー数: {len(filtered_df)}")
+        
+        # 基準2: 分散でソート（降順）
+        filtered_df = filtered_df.sort_values('variance', ascending=False)
+        
+        # 基準3: max_sensors個選定（全センサーの場合は全て選定）
+        if max_sensors >= len(filtered_df):
+            # 全センサーを選定
+            selected_sensors = filtered_df.to_dict('records')
+            if verbose:
+                print(f"  全{len(selected_sensors)}センサーを選定")
+        else:
+            # 分散上位からmax_sensors個選定（同じ機器から複数選ばないように制限）
+            selected_sensors = []
+            equipment_sensor_count = {}
+            max_per_equipment = 2  # 各機器から最大2個まで
+            
+            for _, row in filtered_df.iterrows():
+                equipment_id = row['equipment_id']
+                current_count = equipment_sensor_count.get(equipment_id, 0)
+                
+                # 同じ機器からの選定数が上限に達していなければ選定
+                if current_count < max_per_equipment:
+                    selected_sensors.append(row.to_dict())
+                    equipment_sensor_count[equipment_id] = current_count + 1
+                    
+                    if len(selected_sensors) >= max_sensors:
+                        break
+            
+            if verbose:
+                print(f"  分散上位から{max_sensors}個選定完了")
+                print(f"  機器カバレッジ: {len(equipment_sensor_count)}/{filtered_df['equipment_id'].nunique()}機器")
+        
+        # 選定結果をDataFrameに変換
+        selected_df = pd.DataFrame(selected_sensors)
+        
+        # ランク付け（分散順）
+        selected_df = selected_df.sort_values('variance', ascending=False).reset_index(drop=True)
+        selected_df['rank'] = range(1, len(selected_df) + 1)
+        
+        if verbose:
+            print(f"  最終選定センサー数: {len(selected_df)}")
+            print(f"  欠損率範囲: {selected_df['missing_ratio'].min():.2%} ~ {selected_df['missing_ratio'].max():.2%}")
+            print(f"  分散範囲: {selected_df['variance'].min():.2f} ~ {selected_df['variance'].max():.2f}")
+        
+        # 選定結果を保存
+        import os
+        os.makedirs(output_dir, exist_ok=True)
+        
+        output_path = os.path.join(output_dir, "var_selected_sensors.csv")
+        selected_df.to_csv(output_path, index=False, encoding='utf-8-sig')
+        
+        if verbose:
+            print(f"  保存: {output_path}")
+        
+        return selected_df
+    
+    @staticmethod
     def _process_group(
         group: pd.DataFrame,
         lookback_days: int,

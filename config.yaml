@@ -30,7 +30,7 @@ scaling:
 
 # LiNGAM設定
 lingam:
-  algorithm: "DirectLiNGAM"  # DirectLiNGAM, ICALiNGAM, VARLiNGAM
+  algorithm: "DirectLiNGAM"  # DirectLiNGAM, ICALiNGAM
   random_state: 42
   max_iter: 1000
   
@@ -43,7 +43,44 @@ bootstrap:
 # KPI設定
 kpi:
   target_labels: ["label_future_30d", "label_future_60d", "label_future_90d"]
-  primary_label: "label_future_90d"  # デフォルトは90日先予測
+  primary_label: "u_i_target"  # v0.1.2: ランダム効果u_iをKPIとして使用
+  # グループ別分析設定
+  u_group_analysis:
+    enabled: true
+    groups: ["top30", "middle", "bottom30"]  # 上位30%・中位40%・下位30%を比較
+    compare_mode: true
+
+# データ不均衡補正設定（v0.1.3で追加）
+imbalance_correction:
+  enabled: true  # SMOTE拡張を有効化
+  min_ratio_threshold: 10.0  # 10倍以上の差がある場合に補正
+  target_strategy: "mean"  # "mean": 他グループの平均、"max": 最大グループに合わせる
+  smote_k_neighbors: 5  # SMOTE のk近傍数
+  random_state: 42
+  save_augmented: true  # 拡張後データを保存
+
+# ハザードモデル設定（v0.1.2で追加）
+hazard_model:
+  # データ設定
+  n_states: 8  # 健全度状態数（8分割）
+  min_data_points: 30  # 最低データ点数
+  min_delta_t: 1  # 最小点検間隔（日）
+  max_delta_t: 365  # 最大点検間隔（日）
+  
+  # NUTS推定パラメータ
+  n_draws: 2000
+  n_tune: 1000
+  n_chains: 8
+  n_cores: 8
+  target_accept: 0.95
+  random_seed: 42
+  
+  # グループ分け設定
+  top_percentile: 0.70  # 上位30%（70パーセンタイル以上）
+  bottom_percentile: 0.30  # 下位30%（30パーセンタイル以下）
+  
+  # 実行モード
+  skip_nuts: false  # true: ADVI高速近似使用（開発時）、false: NUTS正確推定（論文用）
 
 # 可視化設定
 visualization:
@@ -55,5 +92,5 @@ visualization:
 
 # その他
 misc:
-  n_jobs: 10  # 並列処理のコア数(-1で全コア使用、10で10コア使用)
-  verbose: 1  # ログレベル(0: なし, 1: 標準, 2: 詳細)
+  n_jobs: 16  # 並列処理のコア数(-1で全コア使用、16で16コア使用)
+  verbose: 1  # ログレベル(0: なし、1: 標準、2: 詳細)

@@ -475,6 +475,129 @@ def run_bootstrap_validation(
     return stable_edges_df, edge_frequencies
 
 
+# ========================================================================
+# v0.1.2: グループ間因果構造の比較
+# ========================================================================
+
+def compare_causal_structures(
+    results_dict: Dict[str, Dict],
+    effects_dict: Dict[str, pd.DataFrame],
+    feature_names: List[str],
+    output_dir: str = None
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    グループ間の因果構造を比較
+    
+    Parameters:
+        results_dict: {group_name: causal_results} の辞書
+        effects_dict: {group_name: effects_df} の辞書
+        feature_names: 特徴量名のリスト
+        output_dir: 出力ディレクトリ
+    
+    Returns:
+        (group_comparison_df, differential_effects_df)
+    """
+    from pathlib import Path
+    import pandas as pd
+    import numpy as np
+    
+    print("\n[グループ間因果構造の比較]")
+    
+    groups = list(results_dict.keys())
+    print(f"  比較グループ: {groups}")
+    
+    if len(groups) < 2:
+        print("  ⚠ 警告: 比較するグループが2つ未満です。")
+        return pd.DataFrame(), pd.DataFrame()
+    
+    # エッジの比較
+    edges_comparison = []
+    
+    for i, feat_from in enumerate(feature_names):
+        for j, feat_to in enumerate(feature_names):
+            if i == j:
+                continue
+            
+            edge_data = {
+                'from': feat_from,
+                'to': feat_to
+            }
+            
+            # 各グループの効果値を取得
+            for group in groups:
+                adj_matrix = results_dict[group]['adjacency_matrix']
+                effect = adj_matrix[i, j]
+                edge_data[f'effect_{group}'] = effect
+            
+            # 差分を計算（グループ間）
+            if len(groups) == 2:
+                diff = edge_data[f'effect_{groups[0]}'] - edge_data[f'effect_{groups[1]}']
+                edge_data['effect_diff'] = diff
+                edge_data['abs_diff'] = abs(diff)
+            
+            edges_comparison.append(edge_data)
+    
+    comparison_df = pd.DataFrame(edges_comparison)
+    
+    # 絶対差分でソート
+    if 'abs_diff' in comparison_df.columns:
+        comparison_df = comparison_df.sort_values('abs_diff', ascending=False)
+    
+    print(f"\n  全エッジ数: {len(comparison_df)}")
+    
+    if 'abs_diff' in comparison_df.columns:
+        # 顕著な差異のあるエッジ（絶対差分 > 0.1）
+        significant_diff = comparison_df[comparison_df['abs_diff'] > 0.1]
+        print(f"  顕著な差異のあるエッジ: {len(significant_diff)} (|差分| > 0.1)")
+    
+    # KPIへの効果の比較
+    differential_effects = []
+    
+    for feat in feature_names:
+        effect_data = {'feature': feat}
+        
+        for group in groups:
+            effects_df = effects_dict[group]
+            feat_effect = effects_df[effects_df['feature'] == feat]
+            
+            if len(feat_effect) > 0:
+                effect_data[f'effect_{group}'] = feat_effect.iloc[0]['effect']
+                effect_data[f'rank_{group}'] = feat_effect.iloc[0]['rank']
+            else:
+                effect_data[f'effect_{group}'] = 0.0
+                effect_data[f'rank_{group}'] = len(feature_names) + 1
+        
+        # 差分を計算
+        if len(groups) == 2:
+            diff = effect_data[f'effect_{groups[0]}'] - effect_data[f'effect_{groups[1]}']
+            effect_data['effect_diff'] = diff
+            effect_data['abs_diff'] = abs(diff)
+        
+        differential_effects.append(effect_data)
+    
+    differential_df = pd.DataFrame(differential_effects)
+    
+    # 絶対差分でソート
+    if 'abs_diff' in differential_df.columns:
+        differential_df = differential_df.sort_values('abs_diff', ascending=False)
+    
+    print(f"\n  トップ5差分効果:")
+    print(differential_df.head(5).to_string(index=False))
+    
+    # 保存
+    if output_dir:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        comparison_df.to_csv(output_dir / "group_comparison.csv", index=False)
+        differential_df.to_csv(output_dir / "differential_effects.csv", index=False)
+        
+        print(f"\n  [保存] {output_dir / 'group_comparison.csv'}")
+        print(f"  [保存] {output_dir / 'differential_effects.csv'}")
+    
+    return comparison_df, differential_df
+
+
 if __name__ == "__main__":
     # テスト用コード
     print("BootstrapValidatorクラスのテスト")

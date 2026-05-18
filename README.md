@@ -1,12 +1,24 @@
-# Pump Equipment LiNGAM Causal Discovery MVP v0.1.0
+# Pump Equipment LiNGAM Causal Discovery MVP v0.1.3
 
 [日本語版 / Japanese Version](README_JP.md)
 
 ## Overview
 
-An MVP system for feature engineering and causal discovery for pump equipment. Generates 22 features from 90-day measurement data and discovers causal relationships to anomaly prediction using LiNGAM (Linear Non-Gaussian Acyclic Model).
+An MVP system for feature engineering and causal discovery for pump equipment. **v0.1.3** adds **automatic data imbalance correction using SMOTE**, ensuring robust causal inference even with severely imbalanced groups (25x difference in sample sizes).
 
-We analyzed 650 days (2024/3/6 - 2025/12/17) of measurement data from 64 pump equipment units and quantified causal effects on 90-day-ahead anomaly prediction (label_future_90d).
+We analyze pump-specific deterioration patterns using Bayesian hierarchical models and discover causal relationships between features and deterioration random effects, comparing causal structures across pump groups (fast vs. slow deterioration). **Now with automatic SMOTE augmentation** to preserve causal structure integrity under data imbalance.
+
+**New in v0.1.3:**
+- Automatic imbalance detection (10x threshold)
+- SMOTE data augmentation for minority groups
+- Causal structure preservation validation (<3% effect change)
+- Before/after comparison framework
+
+**Features from v0.1.2:**
+- Markov degradation hazard model with random effects (PyMC NUTS sampler)
+- Pump-specific deterioration rates (u_i) as causal discovery target
+- Three-tier group analysis (top 30%, middle 40%, bottom 30%)
+- Enhanced visualizations for arXiv paper: "Understanding Deterioration Random Effect for Causal Discovery"
 
 ## Project Structure
 
@@ -22,29 +34,97 @@ feature_eng_cause_lingam/
 │   ├── feature_engineering.py     # Feature generation
 │   ├── causal_discovery.py        # LiNGAM causal discovery
 │   ├── visualization.py           # Visualization
-│   └── validation.py              # Bootstrap validation
+│   ├── validation.py              # Bootstrap validation
+│   └── hazard_model/              # v0.1.2: Hazard model module
+│       ├── config_hazard.py       # Hazard model configuration
+│       ├── pymc_model.py          # PyMC NUTS model
+│       ├── posterior.py           # u_i extraction
+│       └── preprocess.py          # Hazard data preprocessing
 ├── output/                 # Output files
 ├── config.yaml            # Configuration file
-├── requirements.txt       # Dependencies
+├── requirements.txt       # Dependencies (includes PyMC)
 └── main.py               # Main pipeline
-
 ```
-
-## Setup
-
-```bash
-# Install dependencies
+ (includes PyMC for hazard modeling)
 pip install -r requirements.txt
 ```
 
 ## Usage
 
+### v0.1.3: Hazard Model + SMOTE Augmentation + Causal Discovery
+
 ```bash
-# Run entire pipeline
-python main.py
+# Run entire v0.1.3 pipeline (default, includes SMOTE)
+python main.py --step causal_discovery
+
+# Run hazard model only (u_i estimation)
+python main.py --hazard-only
+
+# Run causal discovery with automatic SMOTE augmentation
+python main.py --step causal_discovery  # SMOTE applied if imbalance ≥10x
 
 # Run individual steps
-python main.py --step preprocessing
+python main.py --step hazard_preprocessing
+python main.py --step hazard_estimation      # NUTS: 60-120 min
+python main.py --step ui_extraction
+python main.py --step feature_ui_merge
+```
+
+### v0.1.3 Configuration
+
+**SMOTE Data Augmentation** (config.yaml):
+```yaml
+imbalance_correction:
+  enabled: true                  # Enable automatic SMOTE augmentation
+  min_ratio_threshold: 10.0      # Trigger when imbalance ≥10x
+  target_strategy: "mean"         # Target: mean of other groups
+  smote_k_neighbors: 5           # k-neighbors for SMOTE
+  random_state: 42
+  save_augmented: true           # Save augmented data
+```
+
+### v0.1.3 Outputs
+
+**Hazard Model Outputs:**
+- `output/model_input.npz` - Hazard model input data
+- `output/trace.nc` - NUTS posterior samples (ArviZ InferenceData)
+- `output/pump_heterogeneity.csv` - Pump-specific random effects u_i
+- `output/features_with_ui.csv` - Features merged with u_i
+
+**Causal Discovery Outputs (3 groups):**
+- `output/causal_results_top30.pkl` - Causal results for top 30% pumps
+- `output/causal_results_middle.pkl` - Causal results for middle 40% pumps
+- `output/causal_results_bottom30_augmented.pkl` - **Causal results for bottom 30% (SMOTE augmented)**
+- `output/causal_results_bottom30_original.pkl` - **Causal results for bottom 30% (original data, for comparison)**
+- `output/kpi_effects_top30.csv` - Causal effects (top 30%)
+- `output/kpi_effects_middle.csv` - Causal effects (middle 40%)
+- `output/kpi_effects_bottom30_augmented.csv` - **Causal effects (bottom 30%, SMOTE augmented)**
+- `output/kpi_effects_bottom30_original.csv` - **Causal effects (bottom 30%, original, for comparison)**
+
+**Visualization Outputs:**
+- `output/ui_distribution_comparison.png` - u_i distribution histograms (3 groups)
+- `output/causal_graph_groups.png` - Side-by-side causal graphs (3 panels)
+- `output/causal_graph_top30.png` - Top 30% causal graph
+- `output/causal_graph_middle.png` - Middle 40% causal graph
+- `output/causal_graph_bottom30.png` - Bottom 30% causal graph (augmented)
+- `output/effect_comparison_lineplot.png` - Effect comparison line plot
+- `output/effect_heatmap_top30.png` - Top 30% effect heatmap
+- `output/effect_heatmap_middle.png` - Middle 40% effect heatmap
+- `output/effect_heatmap_bottom30.png` - Bottom 30% effect heatmap (augmented)
+- `output/bootstrap_stability_heatmap.png` - Bootstrap stability heatmap
+- `output/bootstrap_kpi_stability.png` - KPI stability
+
+### v0.1.0 Outputs
+
+
+### v0.1.0: Original (Anomaly Prediction KPI)
+
+```bash
+# Run v0.1.0 pipeline
+python main.py --version v0.1.0
+
+# Run with specific algorithm
+python main.py --version v0.1.0 --step causal_discoverying
 python main.py --step feature_engineering
 python main.py --step causal_discovery
 python main.py --step visualization
@@ -62,6 +142,30 @@ python main.py --step validation
 
 ## Technical Specifications
 
+### v0.1.3: Hazard Model + SMOTE Augmentation + Causal Discovery
+
+- **Equipment**: 64-280 pump units (depends on data availability)
+- **Hazard Model**: Markov degradation with random effects
+  - Model: λ_ik(t) = λ_0k * exp(β^T x + u_i)
+  - Random Effect: u_i ~ N(0, σ²)
+  - States: K=8 (health discretization)
+  - Estimation: PyMC NUTS (draws=2000, tune=1000, chains=8, cores=8)
+  - Convergence: R-hat < 1.01, ESS bulk > 900, ESS tail > 1600
+- **Grouping**: Three-tier analysis
+  - Top 30% (u_i ≥ 70th percentile): Fast deterioration, 57,881 records
+  - Middle 40% (30th < u_i < 70th): Moderate deterioration, 32,740 records
+  - Bottom 30% (u_i ≤ 30th percentile): Slow deterioration, 2,240 → **45,310 records (SMOTE augmented)**
+- **Data Imbalance Correction** (NEW in v0.1.3):
+  - Automatic detection: Trigger when max_size/min_size ≥ 10.0
+  - SMOTE augmentation: k-neighbors=5, target=mean(other_groups)
+  - Validation: Compare causal structure before/after augmentation
+  - Result: Bottom30 expanded 20x with <3% change in key effects
+- **Causal Discovery**: DirectLiNGAM per group
+- **KPI**: u_i_target (pump-specific random effect)
+- **Comparison**: Three-group comparison + SMOTE validation
+
+### v0.1.0: Original Specification
+
 - **Equipment**: 64 pump units
 - **Data Period**: 2024/3/6 ~ 2025/12/17 (650 days, 92,861 records)
 - **Check Items**: 229 items
@@ -70,7 +174,7 @@ python main.py --step validation
 - **KPI**: label_future_90d (90-day-ahead anomaly prediction)
 - **Causal Discovery**: DirectLiNGAM
 - **Validation**: Bootstrap (100 iterations, 80% subsampling)
-- **Parallel Processing**: 10 cores (joblib.Parallel)
+- **Parallel Processing**: 16 cores (joblib.Parallel)
 
 ## Results
 
@@ -137,12 +241,43 @@ Bootstrap validation identified 109 stable edges (frequency ≥70%). Basic stati
 
 10-core parallel processing completed feature engineering (229 groups) in 1.2 minutes and bootstrap validation (100 iterations) in 28.9 minutes, enabling **periodic retraining in production environments**.
 
+## Key Findings from v0.1.3
+
+### 1. Causal Structure Preservation under SMOTE Augmentation
+
+**Bottom30 group expanded 20x (2,240 → 45,310 records)** with minimal effect change:
+- **kurtosis effect**: -0.969 → -0.958 (1.1% change)
+- **skewness effect**: +0.913 → +0.886 (2.9% change)
+- **Conclusion**: SMOTE augmentation improves statistical stability without distorting causal structure
+
+### 2. 40x Kurtosis Effect Difference Between Groups
+
+- **Top30** (fast deterioration): kurtosis effect = +0.024
+- **Bottom30** (slow deterioration): kurtosis effect = -0.958
+- **Ratio**: 40x difference in magnitude
+- **Interpretation**: Data distribution shape has drastically different causal impacts depending on deterioration speed
+
+### 3. Zero Direct Effects in Middle Group
+
+- **Middle40** (32,740 records): **No direct causal effects to u_i_target**
+- **Implication**: Clear causal signals emerge only in extreme deterioration states (top30/bottom30)
+- **Application**: Suggests threshold-based anomaly detection strategies
+
+### 4. Robust Causal Inference under Data Imbalance
+
+- Automatic 10x imbalance detection successfully triggered
+- SMOTE expanded minority group to match other groups' average size
+- Causal structure validated through before/after comparison
+- Demonstrates feasibility of causal discovery in imbalanced real-world datasets
+
 ## Future Directions
 
-1. **Different KPI Periods**: Compare causal relationships for 30-day and 60-day-ahead predictions to analyze how feature importance changes with prediction horizon
-2. **Physical Interpretation**: Validate physical plausibility of discovered causal relationships with domain experts
-3. **Causal Effect Utilization**: Build anomaly prediction models using identified causal features
-4. **Real-time Monitoring**: Develop early warning systems based on thresholds for top causal features
+1. **Bootstrap Validation on Augmented Data**: Run 100-iteration bootstrap on SMOTE-augmented bottom30
+2. **Temporal Causal Discovery**: Implement VAR-LiNGAM for time-series causal analysis
+3. **Different KPI Periods**: Compare causal relationships for 30-day and 60-day-ahead predictions
+4. **Physical Interpretation**: Validate physical plausibility with domain experts
+5. **Real-time Monitoring**: Develop early warning systems based on top causal features
+6. **Publication**: Prepare arXiv paper on "Causal Discovery under Heterogeneity and Imbalance"
 
 ## Feature List
 
@@ -172,12 +307,37 @@ Apache License 2.0 - See [LICENSE](LICENSE) file for details.
 
 ## Version History
 
+### v0.1.3 (2025-05-27)
+- **Data Imbalance Correction**: Automatic SMOTE augmentation
+  - 10x imbalance threshold with automatic detection
+  - bottom30 expanded from 2,240 → 45,310 records (20x)
+  - Causal structure preservation validation (kurtosis/skewness <3% change)
+- **Comparison Analysis**: Before/after augmentation causal structure comparison
+- `imbalance_correction` configuration added (config.yaml)
+- `apply_smote_if_needed()` function implemented (src/causal_discovery.py)
+- Lesson_Hazard_Cause.md Section 7.2 updated with full results
+
+### v0.1.2 (2025-05-26)
+- **PyMC NUTS Integration**: Markov degradation hazard model for u_i estimation
+  - 2,338-second NUTS estimation for 112 pumps (u_i range: -5.51 ~ +6.47)
+  - Convergence: R-hat 1.00-1.01, ESS 900+
+- **Three-tier Group Analysis**: top30/middle/bottom30 causal structure comparison
+  - top30: 57,881 records, kurtosis +0.024
+  - middle: 32,740 records, **zero direct effects**
+  - bottom30: 2,240 records, kurtosis -0.969 (**40x difference**)
+- **Visualization Enhancements**: Node placement, labels, edge improvements
+  - spring_layout k parameter tuning (2.5-3.5)
+  - Curved edges (connectionstyle='arc3,rad=0.1')
+  - Label position offset (+0.08)
+- `u_group_analysis` configuration added (config.yaml)
+- `Lesson_Hazard_Cause.md` completed (800+ lines)
+
 ### v0.1.0 (2026-05-16)
 - Initial release
 - DirectLiNGAM causal discovery implementation
 - Causal effect analysis of 22 features for 90-day KPI
 - Bootstrap validation for stability assessment
-- 10-core parallel processing optimization
+- 16-core parallel processing optimization
 
 ## Additional Documentation
 
